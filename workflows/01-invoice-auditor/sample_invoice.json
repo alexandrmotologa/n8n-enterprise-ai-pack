@@ -1,0 +1,27 @@
+{
+  "vendor_name": "Acme Cloud Solutions LLC",
+  "vendor_tax_id": "US-94281901",
+  "invoice_number": "INV-2026-0012",
+  "invoice_date": "2026-11-11",
+  "po_reference": "PO-2026-001",
+  "currency": "USD",
+  "line_items": [
+    {
+      "sku": "CLOUD-SUB-M",
+      "description": "Monthly Cloud Hosting Tier M",
+      "quantity": 1,
+      "unit_price": 1000.00,
+      "total_price": 1000.00
+    },
+    {
+      "sku": "SUPP-PREM",
+      "description": "Premium 24/7 SLA Support",
+      "quantity": 1,
+      "unit_price": 500.00,
+      "total_price": 500.00
+    }
+  ],
+  "subtotal": 1500.00,
+  "tax_amount": 120.00,
+  "total_amount": 1620.00
+}

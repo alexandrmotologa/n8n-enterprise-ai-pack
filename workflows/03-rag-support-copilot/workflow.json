@@ -1,0 +1,373 @@
+{
+  "name": "Continuous RAG Knowledge Ingestion & Support Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000001",
+      "name": "Document Ingest Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 200],
+      "webhookId": "rag-ingest-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const doc = $input.item.json.body || $input.item.json;\nconst docId = doc.doc_id || 'DOC-' + Date.now();\nconst docTitle = doc.doc_title || 'Untitled Document';\nconst category = doc.category || 'General';\nconst rawContent = doc.content || '';\n\n// Split document by markdown headings (# and ##)\nconst lines = rawContent.split('\\n');\nconst chunks = [];\nlet currentSection = 'Introduction';\nlet currentText = [];\nlet chunkIdx = 0;\n\nfor (const line of lines) {\n  if (line.startsWith('## ') || line.startsWith('# ')) {\n    if (currentText.length > 0) {\n      const sectionContent = currentText.join('\\n').trim();\n      if (sectionContent.length > 20) {\n        chunks.push({\n          doc_id: docId,\n          doc_title: docTitle,\n          category,\n          section_title: currentSection,\n          chunk_index: chunkIdx++,\n          content: sectionContent\n        });\n      }\n      currentText = [];\n    }\n    currentSection = line.replace(/^#+\\s*/, '').trim();\n  } else {\n    currentText.push(line);\n  }\n}\n\nif (currentText.length > 0) {\n  const remaining = currentText.join('\\n').trim();\n  if (remaining.length > 20) {\n    chunks.push({\n      doc_id: docId,\n      doc_title: docTitle,\n      category,\n      section_title: currentSection,\n      chunk_index: chunkIdx++,\n      content: remaining\n    });\n  }\n}\n\nreturn chunks.map(c => ({ json: c }));"
+      },
+      "id": "3a000001-0001-4000-8000-000000000002",
+      "name": "Semantic Markdown Chunker",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.OPENAI_API_BASE || 'http://mock-services:4000/v1') + '/embeddings' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($env.OPENAI_API_KEY || 'local-mock-key') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"input\": \"{{ $json.content.replace(/\"/g, '\\\\\"') }}\",\n  \"model\": \"text-embedding-3-small\"\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000003",
+      "name": "Generate Vector Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO rag.document_embeddings (doc_id, doc_title, section_title, chunk_index, content, embedding, metadata) VALUES ($1, $2, $3, $4, $5, $6::vector, $7::jsonb) ON CONFLICT DO NOTHING;",
+        "queryParams": "={{ [$('Semantic Markdown Chunker').item.json.doc_id, $('Semantic Markdown Chunker').item.json.doc_title, $('Semantic Markdown Chunker').item.json.section_title, $('Semantic Markdown Chunker').item.json.chunk_index, $('Semantic Markdown Chunker').item.json.content, '[' + $json.data[0].embedding.join(',') + ']', JSON.stringify({ category: $('Semantic Markdown Chunker').item.json.category })].join('|||') }}"
+      },
+      "id": "3a000001-0001-4000-8000-000000000004",
+      "name": "Upsert into pgvector Store",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [760, 200],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"doc_id\": \"{{ $('Semantic Markdown Chunker').first().json.doc_id }}\",\n  \"total_chunks\": {{ $('Semantic Markdown Chunker').all().length }},\n  \"indexed_at\": \"{{ new Date().toISOString() }}\",\n  \"vector_store\": \"pgvector\"\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000005",
+      "name": "Respond Ingestion Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [980, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000006",
+      "name": "Support Query Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 500],
+      "webhookId": "support-query-trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.OPENAI_API_BASE || 'http://mock-services:4000/v1') + '/embeddings' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($env.OPENAI_API_KEY || 'local-mock-key') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"input\": \"{{ ($input.item.json.body ? $input.item.json.body.query : $input.item.json.query || 'help').replace(/\"/g, '\\\\\"') }}\",\n  \"model\": \"text-embedding-3-small\"\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000007",
+      "name": "Embed User Question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [320, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT doc_id, doc_title, section_title, content, 1 - (embedding <=> $1::vector) AS similarity FROM rag.document_embeddings ORDER BY embedding <=> $1::vector LIMIT 3;",
+        "queryParams": "={{ '[' + $json.data[0].embedding.join(',') + ']' }}"
+      },
+      "id": "3a000001-0001-4000-8000-000000000008",
+      "name": "Retrieve Top Context Chunks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [540, 500],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalQuery = $('Support Query Webhook Trigger').first().json.body || $('Support Query Webhook Trigger').first().json;\nconst queryText = (originalQuery.query || '').toLowerCase();\nconst results = $input.all().map(item => item.json);\n\n// Calculate max similarity score\nconst topSimilarity = results.length > 0 ? Number(results[0].similarity || 0) : 0;\n\n// Check for sensitive escalation keywords\nconst escalationTriggers = ['cancel my account', 'dispute charge', 'lawyer', 'legal action', 'breach of contract', 'chargeback'];\nconst hasEscalationKeyword = escalationTriggers.some(trigger => queryText.includes(trigger));\n\nconst requiresEscalation = (topSimilarity < 0.70) || hasEscalationKeyword;\n\nreturn [{\n  json: {\n    query: originalQuery.query,\n    customer_id: originalQuery.customer_id || 'CUST-ANON',\n    session_id: originalQuery.session_id || 'SES-' + Date.now(),\n    retrieved_chunks: results,\n    confidence_score: Number(topSimilarity.toFixed(3)),\n    requires_escalation: requiresEscalation,\n    escalation_reason: hasEscalationKeyword ? 'Sensitive billing or legal cancellation keyword detected' : (topSimilarity < 0.70 ? 'Low vector retrieval confidence (< 0.70)' : null)\n  }\n}];"
+      },
+      "id": "3a000001-0001-4000-8000-000000000009",
+      "name": "Evaluate Grounding & Confidence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 500]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-escalation",
+              "leftValue": "={{ $json.requires_escalation }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "3a000001-0001-4000-8000-000000000010",
+      "name": "Requires Human Escalation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [980, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL || 'http://mock-services:4000/slack/webhook' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": { \"type\": \"plain_text\", \"text\": \"🚨 Priority Support Escalation Required\", \"emoji\": true }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        { \"type\": \"mrkdwn\", \"text\": \"*Customer:* `{{ $json.customer_id }}`\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Confidence:* `{{ $json.confidence_score }}`\" },\n        { \"type\": \"mrkdwn\", \"text\": \"*Reason:* {{ $json.escalation_reason }}\" }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": { \"type\": \"mrkdwn\", \"text\": \"*Inquiry:*\\n{{ $json.query }}\" }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000011",
+      "name": "Alert Tier-2 Support in Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"ESCALATED_TO_HUMAN\",\n  \"customer_id\": \"{{ $json.customer_id }}\",\n  \"confidence_score\": {{ $json.confidence_score }},\n  \"escalation_reason\": \"{{ $json.escalation_reason }}\",\n  \"response\": \"Your request has been routed directly to our senior enterprise support desk for priority handling. A specialist will review your account details and follow up promptly.\"\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000012",
+      "name": "Respond Webhook Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.OPENAI_API_BASE || 'http://mock-services:4000/v1') + '/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + ($env.OPENAI_API_KEY || 'local-mock-key') }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an enterprise AI support engineer. Answer the user question strictly using the provided context chunks. Always append exact citations in the format [Source: Document Title - Section]. If the context does not contain the answer, say so clearly.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Context chunks:\\n{{ $json.retrieved_chunks.map(c => '[' + c.doc_title + ' - ' + c.section_title + ']: ' + c.content).join('\\n\\n') }}\\n\\nQuestion: {{ $json.query }}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000013",
+      "name": "Generate Grounded Answer with Citations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 620]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"RESOLVED\",\n  \"customer_id\": \"{{ $('Evaluate Grounding & Confidence').item.json.customer_id }}\",\n  \"confidence_score\": {{ $('Evaluate Grounding & Confidence').item.json.confidence_score }},\n  \"answer\": \"{{ $json.choices[0].message.content.replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') }}\",\n  \"citations\": {{ JSON.stringify($('Evaluate Grounding & Confidence').item.json.retrieved_chunks.map(c => ({ document: c.doc_title, section: c.section_title }))) }}\n}",
+        "options": {}
+      },
+      "id": "3a000001-0001-4000-8000-000000000014",
+      "name": "Respond Webhook Grounded Answer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 620]
+    }
+  ],
+  "connections": {
+    "Document Ingest Webhook": {
+      "main": [
+        [
+          {
+            "node": "Semantic Markdown Chunker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Semantic Markdown Chunker": {
+      "main": [
+        [
+          {
+            "node": "Generate Vector Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Vector Embedding": {
+      "main": [
+        [
+          {
+            "node": "Upsert into pgvector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert into pgvector Store": {
+      "main": [
+        [
+          {
+            "node": "Respond Ingestion Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support Query Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Embed User Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed User Question": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Top Context Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Top Context Chunks": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Grounding & Confidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Grounding & Confidence": {
+      "main": [
+        [
+          {
+            "node": "Requires Human Escalation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Requires Human Escalation?": {
+      "main": [
+        [
+          {
+            "node": "Alert Tier-2 Support in Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Grounded Answer with Citations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Tier-2 Support in Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Grounded Answer with Citations": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Grounded Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

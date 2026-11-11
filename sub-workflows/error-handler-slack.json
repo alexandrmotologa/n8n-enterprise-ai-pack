@@ -1,0 +1,94 @@
+{
+  "name": "Universal Slack Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e1000001-0001-4000-8000-000000000001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const errorData = $input.item.json;\nconst execution = errorData.execution || {};\nconst workflow = errorData.workflow || {};\n\nconst failedNodeName = execution.lastNodeExecuted || 'Unknown Node';\nconst errorMsg = execution.error ? (execution.error.message || JSON.stringify(execution.error)) : 'Unknown execution failure';\nconst workflowName = workflow.name || 'Enterprise Workflow';\nconst workflowId = workflow.id || 'N/A';\nconst executionId = execution.id || 'N/A';\n\nconst rawUrl = $env.WEBHOOK_URL || 'http://localhost:5678';\nconst n8nBaseUrl = rawUrl.split('/webhook')[0];\nconst executionUrl = n8nBaseUrl + '/workflow/' + workflowId + '/executions/' + executionId;\n\nconst slackBlocks = [\n  {\n    type: 'header',\n    text: {\n      type: 'plain_text',\n      text: 'Critical Workflow Execution Failure',\n      emoji: true\n    }\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: '*Workflow:* ' + workflowName },\n      { type: 'mrkdwn', text: '*Failed Node:* ' + failedNodeName },\n      { type: 'mrkdwn', text: '*Execution ID:* <' + executionUrl + '|#' + executionId + '>' },\n      { type: 'mrkdwn', text: '*Timestamp:* ' + new Date().toISOString() }\n    ]\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: '*Error Message:*\\n```' + errorMsg.slice(0, 500) + '```'\n    }\n  },\n  {\n    type: 'actions',\n    elements: [\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: 'View Execution in n8n' },\n        url: executionUrl,\n        style: 'danger'\n      }\n    ]\n  }\n];\n\nreturn [{\n  json: {\n    workflow_name: workflowName,\n    workflow_id: workflowId,\n    execution_id: executionId,\n    failed_node: failedNodeName,\n    error_message: errorMsg,\n    execution_url: executionUrl,\n    slack_payload: { blocks: slackBlocks }\n  }\n}];"
+      },
+      "id": "e1000001-0001-4000-8000-000000000002",
+      "name": "Format Incident Card",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL || 'http://mock-services:4000/slack/webhook' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.slack_payload) }}",
+        "options": {}
+      },
+      "id": "e1000001-0001-4000-8000-000000000003",
+      "name": "Dispatch Incident to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit.logs (entity_type, entity_id, action, payload) VALUES ('WORKFLOW_EXECUTION', $1, 'FAILURE_ALERT_DISPATCHED', $2::jsonb);",
+        "queryParams": "={{ [$json.execution_id, JSON.stringify({ workflow: $json.workflow_name, failed_node: $json.failed_node, error: $json.error_message })].join('|||') }}"
+      },
+      "id": "e1000001-0001-4000-8000-000000000004",
+      "name": "Record Incident in Audit Logs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [760, 300],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Incident Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Incident Card": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Incident to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Incident to Slack": {
+      "main": [
+        [
+          {
+            "node": "Record Incident in Audit Logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

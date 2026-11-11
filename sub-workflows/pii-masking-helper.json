@@ -1,0 +1,68 @@
+{
+  "name": "PII Masking and Compliance Sanitizer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pii-sanitize",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "p1000001-0001-4000-8000-000000000001",
+      "name": "PII Ingest Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "pii-sanitize-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst item = $input.item.json.body || $input.item.json;\nlet text = item.text || item.prompt || JSON.stringify(item);\n\nconst mapping = {};\nlet maskCount = 0;\n\nfunction createToken(type, rawVal) {\n  const hash = crypto.createHash('md5').update(rawVal).digest('hex').slice(0, 6);\n  const token = `[${type}_${hash}]`;\n  mapping[token] = rawVal;\n  maskCount++;\n  return token;\n}\n\n// 1. Email pattern\nconst emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})/g;\ntext = text.replace(emailRegex, (match) => createToken('EMAIL', match));\n\n// 2. Phone numbers (international and local)\nconst phoneRegex = /(\\+?\\d{1,3}[-.\\s]?)?\\(?\\d{3}\\)?[-.\\s]?\\d{3}[-.\\s]?\\d{4}/g;\ntext = text.replace(phoneRegex, (match) => createToken('PHONE', match.trim()));\n\n// 3. US SSN / EIN / Tax IDs\nconst taxIdRegex = /\\b(\\d{2}-\\d{7}|\\d{3}-\\d{2}-\\d{4})\\b/g;\ntext = text.replace(taxIdRegex, (match) => createToken('TAX_ID', match));\n\n// 4. Credit card numbers (13-19 digits with dashes/spaces)\nconst cardRegex = /\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13})\\b/g;\ntext = text.replace(cardRegex, (match) => createToken('CARD', match));\n\nreturn [{\n  json: {\n    sanitized_text: text,\n    tokens_masked_count: maskCount,\n    mapping_dictionary: mapping,\n    sanitized_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "p1000001-0001-4000-8000-000000000002",
+      "name": "Regex Scrub Sensitive Patterns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"sanitized_text\": \"{{ $json.sanitized_text.replace(/\"/g, '\\\\\"').replace(/\\n/g, '\\\\n') }}\",\n  \"tokens_masked_count\": {{ $json.tokens_masked_count }},\n  \"mapping\": {{ JSON.stringify($json.mapping_dictionary) }}\n}",
+        "options": {}
+      },
+      "id": "p1000001-0001-4000-8000-000000000003",
+      "name": "Respond Sanitized Output",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [540, 300]
+    }
+  ],
+  "connections": {
+    "PII Ingest Webhook": {
+      "main": [
+        [
+          {
+            "node": "Regex Scrub Sensitive Patterns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regex Scrub Sensitive Patterns": {
+      "main": [
+        [
+          {
+            "node": "Respond Sanitized Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

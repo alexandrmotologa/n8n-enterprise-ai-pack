@@ -1,0 +1,12 @@
+{
+  "name": "n8n-enterprise-mock-services",
+  "version": "1.0.0",
+  "description": "Local mock simulation service for n8n enterprise workflows (Slack, OpenAI, ERP, CRM)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

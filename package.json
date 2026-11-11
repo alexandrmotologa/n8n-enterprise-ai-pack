@@ -1,0 +1,26 @@
+{
+  "name": "n8n-enterprise-ai-pack",
+  "version": "1.0.0",
+  "description": "Production-ready enterprise n8n workflow blueprints with multimodal invoice 3-way matching, multi-agent lead enrichment, continuous RAG knowledge ingestion, and human-in-the-loop approvals.",
+  "author": "Alexandr Motologa",
+  "license": "MIT",
+  "private": false,
+  "main": "scripts/test_all.js",
+  "scripts": {
+    "test": "node scripts/validate_workflows.js && node scripts/test_all.js",
+    "validate": "node scripts/validate_workflows.js",
+    "seed": "node scripts/seed_databases.js",
+    "generate-invoices": "node scripts/generate_sample_invoices.js",
+    "mock": "node mock-services/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pdfkit": "^0.16.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

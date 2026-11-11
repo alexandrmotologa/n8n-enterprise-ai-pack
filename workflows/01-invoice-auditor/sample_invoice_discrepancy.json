@@ -1,0 +1,20 @@
+{
+  "vendor_name": "CloudScale Technologies",
+  "vendor_tax_id": "US-11029482",
+  "invoice_number": "INV-2026-8841",
+  "invoice_date": "2026-11-09",
+  "po_reference": "PO-2026-003",
+  "currency": "USD",
+  "line_items": [
+    {
+      "sku": "DEV-ENV-POD",
+      "description": "Kubernetes Dedicated Dev Pod",
+      "quantity": 2,
+      "unit_price": 435.00,
+      "total_price": 870.00
+    }
+  ],
+  "subtotal": 870.00,
+  "tax_amount": 69.60,
+  "total_amount": 939.60
+}

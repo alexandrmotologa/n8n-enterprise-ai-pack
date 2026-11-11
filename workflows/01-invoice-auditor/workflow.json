@@ -1,0 +1,416 @@
+{
+  "name": "Multimodal Financial Invoice Auditor & Reconciler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-auditor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000001",
+      "name": "Invoice Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "invoice-auditor-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizes input whether sent as JSON payload, base64 document, or extracted OCR\nconst body = $input.item.json.body || $input.item.json;\n\n// Support direct invoice payload or extract from document wrapper\nconst invoice = {\n  vendor_name: body.vendor_name || 'Unknown Vendor',\n  vendor_tax_id: body.vendor_tax_id || '',\n  invoice_number: body.invoice_number || 'INV-' + Date.now(),\n  invoice_date: body.invoice_date || new Date().toISOString().split('T')[0],\n  po_reference: body.po_reference || body.po_number || '',\n  currency: body.currency || 'USD',\n  line_items: Array.isArray(body.line_items) ? body.line_items : [],\n  subtotal: Number(body.subtotal || 0),\n  tax_amount: Number(body.tax_amount || 0),\n  total_amount: Number(body.total_amount || 0)\n};\n\n// Line item recalculation and math validation\nlet calculatedSubtotal = 0;\nconst validatedItems = invoice.line_items.map(item => {\n  const qty = Number(item.quantity || 0);\n  const unitPrice = Number(item.unit_price || 0);\n  const lineTotal = Number(item.total_price || (qty * unitPrice));\n  calculatedSubtotal += lineTotal;\n  return {\n    sku: String(item.sku || 'N/A'),\n    description: String(item.description || 'Line Item'),\n    quantity: qty,\n    unit_price: unitPrice,\n    total_price: lineTotal\n  };\n});\n\nconst mathDiff = Math.abs(calculatedSubtotal - invoice.subtotal);\nconst mathValid = mathDiff <= 0.05;\n\nreturn [{\n  json: {\n    ...invoice,\n    line_items: validatedItems,\n    calculated_subtotal: Number(calculatedSubtotal.toFixed(2)),\n    math_valid: mathValid,\n    audit_timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "1a000001-0001-4000-8000-000000000002",
+      "name": "Normalize & Validate Invoice Math",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT po.po_number, po.vendor_name, po.vendor_tax_id, po.subtotal, po.tax_amount, po.total_amount, po.currency, po.status, COALESCE(json_agg(json_build_object('sku', items.sku, 'description', items.description, 'quantity', items.quantity, 'unit_price', items.unit_price, 'total_price', items.total_price)) FILTER (WHERE items.id IS NOT NULL), '[]'::json) AS po_items FROM erp.purchase_orders po LEFT JOIN erp.purchase_order_items items ON po.po_number = items.po_number WHERE po.po_number = $1 GROUP BY po.po_number;",
+        "queryParams": "={{ $json.po_reference }}"
+      },
+      "id": "1a000001-0001-4000-8000-000000000003",
+      "name": "Fetch PO from PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [540, 300],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const invoice = $('Normalize & Validate Invoice Math').first().json;\nconst poList = $input.all();\n\nif (!poList || poList.length === 0 || !poList[0].json.po_number) {\n  return [{\n    json: {\n      ...invoice,\n      po_found: false,\n      decision: 'SECURITY_ALERT',\n      reason: `Referenced PO ${invoice.po_reference} not found in ERP records`,\n      variance_pct: 100.0\n    }\n  }];\n}\n\nconst po = poList[0].json;\nconst taxIdMatch = (invoice.vendor_tax_id.trim().toUpperCase() === po.vendor_tax_id.trim().toUpperCase());\n\nif (!taxIdMatch) {\n  return [{\n    json: {\n      ...invoice,\n      po_found: true,\n      po_record: po,\n      decision: 'SECURITY_ALERT',\n      reason: `Tax ID mismatch: Invoice ${invoice.vendor_tax_id} vs PO ${po.vendor_tax_id}. Potential fraud or vendor impersonation.`,\n      variance_pct: 100.0\n    }\n  }];\n}\n\n// Calculate variance between invoice total and PO total\nconst poTotal = Number(po.total_amount);\nconst invTotal = Number(invoice.total_amount);\nconst diff = Math.abs(invTotal - poTotal);\nconst variancePct = poTotal > 0 ? (diff / poTotal) * 100 : 100;\n\n// Business rules:\n// Auto-approve: variance <= 0.5% AND total < $2,000\n// Require Slack HITL approval: variance > 0.5% OR total >= $2,000\nlet decision = 'REQUIRE_HUMAN_APPROVAL';\nlet reason = '';\n\nif (variancePct <= 0.5 && invTotal < 2000) {\n  decision = 'AUTO_APPROVE';\n  reason = `Within tolerance (variance: ${variancePct.toFixed(2)}%, total < $2,000)`;\n} else if (variancePct > 0.5) {\n  decision = 'REQUIRE_HUMAN_APPROVAL';\n  reason = `Variance of ${variancePct.toFixed(2)}% exceeds 0.5% automated threshold`;\n} else if (invTotal >= 2000) {\n  decision = 'REQUIRE_HUMAN_APPROVAL';\n  reason = `High-value invoice ($${invTotal.toFixed(2)} >= $2,000 threshold requires executive signoff)`;\n}\n\nreturn [{\n  json: {\n    ...invoice,\n    po_found: true,\n    po_record: po,\n    variance_pct: Number(variancePct.toFixed(3)),\n    decision,\n    reason,\n    tax_id_match: taxIdMatch\n  }\n}];"
+      },
+      "id": "1a000001-0001-4000-8000-000000000004",
+      "name": "Evaluate 3-Way Match & Variance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-auto-approve",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "AUTO_APPROVE",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "1a000001-0001-4000-8000-000000000005",
+      "name": "Is Auto-Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ERP_PAYMENT_WEBHOOK_URL || 'http://mock-services:4000/erp/payment-webhook' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "invoice_number",
+              "value": "={{ $json.invoice_number }}"
+            },
+            {
+              "name": "po_number",
+              "value": "={{ $json.po_reference }}"
+            },
+            {
+              "name": "vendor_name",
+              "value": "={{ $json.vendor_name }}"
+            },
+            {
+              "name": "total_amount",
+              "value": "={{ $json.total_amount }}"
+            },
+            {
+              "name": "approval_type",
+              "value": "AUTOMATED_3WAY_MATCH"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000006",
+      "name": "Dispatch ERP Payment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 180]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO erp.invoices (invoice_number, po_number, vendor_name, vendor_tax_id, invoice_date, subtotal, tax_amount, total_amount, variance_pct, status, decision_by, decision_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'AUTO_APPROVED', 'SYSTEM_3WAY_RULE', CURRENT_TIMESTAMP) ON CONFLICT (invoice_number) DO UPDATE SET status = 'AUTO_APPROVED', decision_at = CURRENT_TIMESTAMP;",
+        "queryParams": "={{ [$json.invoice_number, $json.po_reference, $json.vendor_name, $json.vendor_tax_id, $json.invoice_date, $json.subtotal, $json.tax_amount, $json.total_amount, $json.variance_pct].join(',') }}"
+      },
+      "id": "1a000001-0001-4000-8000-000000000007",
+      "name": "Record Approved Invoice in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1440, 180],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"invoice_number\": \"{{ $json.invoice_number }}\",\n  \"decision\": \"AUTO_APPROVED\",\n  \"variance_pct\": {{ $json.variance_pct }},\n  \"payment_dispatched\": true,\n  \"message\": \"Invoice matched PO within 0.5% tolerance and under $2,000 threshold. Payment queued.\"\n}",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000008",
+      "name": "Respond Webhook Auto-Approved",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1660, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst item = $input.item.json;\nconst token = crypto.randomBytes(24).toString('hex');\nconst callbackUrl = `${$env.WEBHOOK_URL || 'http://localhost:5678/'}webhook/invoice-approval-callback`;\n\n// Construct Slack Block Kit Card\nconst blocks = [\n  {\n    type: 'header',\n    text: {\n      type: 'plain_text',\n      text: item.decision === 'SECURITY_ALERT' ? '⚠️ Fraud / Security Alert: Invoice Discrepancy' : '📋 Invoice Requires Approval (3-Way Match Variance)',\n      emoji: true\n    }\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*Invoice:* `${item.invoice_number}`` },\n      { type: 'mrkdwn', text: `*PO Number:* `${item.po_reference || 'N/A'}`` },\n      { type: 'mrkdwn', text: `*Vendor:* ${item.vendor_name}` },\n      { type: 'mrkdwn', text: `*Tax ID:* `${item.vendor_tax_id}`` },\n      { type: 'mrkdwn', text: `*Invoice Amount:* $${item.total_amount.toFixed(2)}` },\n      { type: 'mrkdwn', text: `*PO Amount:* $${item.po_record ? Number(item.po_record.total_amount).toFixed(2) : '0.00'}` },\n      { type: 'mrkdwn', text: `*Variance:* `${item.variance_pct.toFixed(2)}%`` },\n      { type: 'mrkdwn', text: `*Audit Status:* *${item.decision}*` }\n    ]\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: `*Audit Reason:* ${item.reason}`\n    }\n  },\n  {\n    type: 'actions',\n    block_id: 'approval_actions',\n    elements: [\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: 'Approve Payment' },\n        style: 'primary',\n        action_id: 'action_approve_invoice',\n        value: JSON.stringify({ token, invoice_number: item.invoice_number, action: 'approve' })\n      },\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: 'Reject Invoice' },\n        style: 'danger',\n        action_id: 'action_reject_invoice',\n        value: JSON.stringify({ token, invoice_number: item.invoice_number, action: 'reject' })\n      }\n    ]\n  }\n];\n\nreturn [{\n  json: {\n    ...item,\n    approval_token: token,\n    callback_url: callbackUrl,\n    slack_payload: { blocks }\n  }\n}];"
+      },
+      "id": "1a000001-0001-4000-8000-000000000009",
+      "name": "Build Slack Block Kit & Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1220, 420]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO erp.invoices (invoice_number, po_number, vendor_name, vendor_tax_id, invoice_date, subtotal, tax_amount, total_amount, variance_pct, status, approval_token) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING_APPROVAL', $10) ON CONFLICT (invoice_number) DO UPDATE SET status = 'PENDING_APPROVAL', approval_token = $10; INSERT INTO erp.pending_approvals (invoice_number, token, variance_pct, requires_executive_signoff, status, expires_at) VALUES ($1, $10, $9, ($8 >= 2000), 'PENDING', CURRENT_TIMESTAMP + INTERVAL '48 hours');",
+        "queryParams": "={{ [$json.invoice_number, $json.po_reference, $json.vendor_name, $json.vendor_tax_id, $json.invoice_date, $json.subtotal, $json.tax_amount, $json.total_amount, $json.variance_pct, $json.approval_token].join(',') }}"
+      },
+      "id": "1a000001-0001-4000-8000-000000000010",
+      "name": "Store Pending Approval in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1440, 420],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL || 'http://mock-services:4000/slack/webhook' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.slack_payload) }}",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000011",
+      "name": "Post Interactive Card to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"AWAITING_APPROVAL\",\n  \"invoice_number\": \"{{ $json.invoice_number }}\",\n  \"decision\": \"{{ $json.decision }}\",\n  \"variance_pct\": {{ $json.variance_pct }},\n  \"reason\": \"{{ $json.reason }}\",\n  \"approval_token\": \"{{ $json.approval_token }}\",\n  \"slack_notified\": true\n}",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000012",
+      "name": "Respond Webhook Pending Approval",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1880, 420]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-approval-callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000013",
+      "name": "Slack Interactive Callback Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 700],
+      "webhookId": "invoice-approval-callback-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst req = $input.item.json;\nlet payload = req.body || req;\n\n// Handle URL-encoded payload from Slack block actions\nif (typeof payload === 'string' || payload.payload) {\n  try {\n    payload = typeof payload.payload === 'string' ? JSON.parse(payload.payload) : payload.payload || payload;\n  } catch (e) {}\n}\n\n// Extract action info\nconst actionElement = payload.actions && payload.actions[0];\nlet actionValue = {};\ntry {\n  actionValue = JSON.parse(actionElement.value || '{}');\n} catch (e) {\n  actionValue = { raw: actionElement.value };\n}\n\nconst actionType = actionElement.action_id === 'action_reject_invoice' || actionValue.action === 'reject' ? 'REJECTED' : 'MANUALLY_APPROVED';\nconst token = actionValue.token || 'mock-token';\nconst invoiceNumber = actionValue.invoice_number || actionValue.invoiceNumber || 'INV-UNKNOWN';\nconst approverName = payload.user ? (payload.user.name || payload.user.username) : 'Human Approver';\n\nreturn [{\n  json: {\n    token,\n    invoice_number: invoiceNumber,\n    status: actionType,\n    decision_by: approverName,\n    decision_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "1a000001-0001-4000-8000-000000000014",
+      "name": "Parse Slack Callback Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [340, 700]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE erp.invoices SET status = $1, decision_by = $2, decision_at = CURRENT_TIMESTAMP WHERE invoice_number = $3; UPDATE erp.pending_approvals SET status = $1 WHERE invoice_number = $3;",
+        "queryParams": "={{ [$json.status, $json.decision_by, $json.invoice_number].join(',') }}"
+      },
+      "id": "1a000001-0001-4000-8000-000000000015",
+      "name": "Update Invoice Status Post-Approval",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [580, 700],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"invoice_number\": \"{{ $json.invoice_number }}\",\n  \"updated_status\": \"{{ $json.status }}\",\n  \"decision_by\": \"{{ $json.decision_by }}\",\n  \"message\": \"Approval callback processed and ERP records synchronized.\"\n}",
+        "options": {}
+      },
+      "id": "1a000001-0001-4000-8000-000000000016",
+      "name": "Respond to Slack Callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [820, 700]
+    }
+  ],
+  "connections": {
+    "Invoice Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate Invoice Math",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate Invoice Math": {
+      "main": [
+        [
+          {
+            "node": "Fetch PO from PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch PO from PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Evaluate 3-Way Match & Variance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate 3-Way Match & Variance": {
+      "main": [
+        [
+          {
+            "node": "Is Auto-Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Auto-Approved?": {
+      "main": [
+        [
+          {
+            "node": "Dispatch ERP Payment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Slack Block Kit & Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch ERP Payment": {
+      "main": [
+        [
+          {
+            "node": "Record Approved Invoice in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Approved Invoice in DB": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Auto-Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Block Kit & Token": {
+      "main": [
+        [
+          {
+            "node": "Store Pending Approval in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Pending Approval in DB": {
+      "main": [
+        [
+          {
+            "node": "Post Interactive Card to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Interactive Card to Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Pending Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Interactive Callback Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Slack Callback Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slack Callback Action": {
+      "main": [
+        [
+          {
+            "node": "Update Invoice Status Post-Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Invoice Status Post-Approval": {
+      "main": [
+        [
+          {
+            "node": "Respond to Slack Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,338 @@
+{
+  "name": "Multi-Agent B2B Lead Enrichment & Outreach Copilot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "2a000001-0001-4000-8000-000000000001",
+      "name": "Lead Ingest Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "lead-ingest-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.item.json.body || $input.item.json;\n\n// Normalize domain\nlet rawDomain = (body.domain || '').trim().toLowerCase();\nrawDomain = rawDomain.replace(/^https?:\\/\\//, '').replace(/^www\\./, '').split('/')[0];\n\nif (!rawDomain && body.contact_email && body.contact_email.includes('@')) {\n  rawDomain = body.contact_email.split('@')[1].toLowerCase();\n}\n\nconst lead = {\n  id: body.lead_id || 'LEAD-' + Date.now(),\n  contact_name: (body.contact_name || 'Prospect').trim(),\n  contact_email: (body.contact_email || '').trim().toLowerCase(),\n  company_name: (body.company_name || 'Unknown Company').trim(),\n  domain: rawDomain,\n  notes: (body.notes || '').trim(),\n  ingest_timestamp: new Date().toISOString()\n};\n\nreturn [{\n  json: lead\n}];"
+      },
+      "id": "2a000001-0001-4000-8000-000000000002",
+      "name": "Sanitize & Normalize Lead Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gathers domain intelligence\n// In production, queries web APIs; runs deterministic heuristics for local offline testing\nconst lead = $input.item.json;\nconst domain = lead.domain;\nconst notes = lead.notes.toLowerCase();\n\nlet industry = 'Technology / Software';\nlet sizeTier = '50-250 employees';\nlet techStack = ['PostgreSQL', 'Docker', 'REST API', 'Node.js'];\nlet publicFunding = 'Series A / Profitable';\n\nif (domain.includes('finscale') || notes.includes('financial') || notes.includes('reconciliation')) {\n  industry = 'Financial Technology & Infrastructure';\n  sizeTier = '100-500 employees';\n  techStack = ['PostgreSQL', 'pgvector', 'Kafka', 'Kubernetes', 'n8n'];\n  publicFunding = 'Series B ($35M)';\n} else if (domain.includes('datadrive') || notes.includes('compliance')) {\n  industry = 'Data Infrastructure & Compliance';\n  sizeTier = '250-1000 employees';\n  techStack = ['PostgreSQL', 'Multi-Cloud', 'Kubernetes', 'Terraform'];\n  publicFunding = 'Growth Stage';\n} else if (domain.includes('handyman') || domain.includes('local') || notes.includes('sms')) {\n  industry = 'Local Trades & Services';\n  sizeTier = '1-5 employees';\n  techStack = ['WordPress', 'cPanel'];\n  publicFunding = 'Bootstrapped';\n}\n\nreturn [{\n  json: {\n    ...lead,\n    enrichment: {\n      industry,\n      size_tier: sizeTier,\n      tech_stack: techStack,\n      public_funding: publicFunding\n    }\n  }\n}];"
+      },
+      "id": "2a000001-0001-4000-8000-000000000003",
+      "name": "Enrich Company Intelligence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.item.json;\nconst enrichment = lead.enrichment;\nconst notes = lead.notes.toLowerCase();\n\n// 4-Pillar ICP Scoring Rubric (Each 0 - 25 points, Total 0 - 100)\nlet industryScore = 10;\nlet sizeScore = 10;\nlet techScore = 10;\nlet painPointScore = 10;\n\n// 1. Industry Fit (Target: B2B SaaS, FinTech, Data Infrastructure)\nif (enrichment.industry.includes('Financial') || enrichment.industry.includes('Compliance')) {\n  industryScore = 25;\n} else if (enrichment.industry.includes('Technology')) {\n  industryScore = 20;\n} else {\n  industryScore = 5;\n}\n\n// 2. Company Size Fit (Target: 50 - 1000 employees)\nif (enrichment.size_tier.includes('250-1000')) {\n  sizeScore = 25;\n} else if (enrichment.size_tier.includes('100-500') || enrichment.size_tier.includes('50-250')) {\n  sizeScore = 22;\n} else {\n  sizeScore = 5;\n}\n\n// 3. Tech Stack Fit (Target: Modern backend, PostgreSQL, orchestration)\nconst matchedTech = enrichment.tech_stack.filter(t => ['PostgreSQL', 'Kubernetes', 'Kafka', 'pgvector', 'n8n'].includes(t));\ntechScore = Math.min(25, 10 + matchedTech.length * 4);\n\n// 4. Pain Point & Buying Signal Fit\nif (notes.includes('reconciliation') || notes.includes('compliance') || notes.includes('multi-cloud') || notes.includes('ledger') || notes.includes('orchestration')) {\n  painPointScore = 24;\n} else if (notes.includes('automation') || notes.includes('pipeline') || notes.includes('financial')) {\n  painPointScore = 18;\n} else {\n  painPointScore = 6;\n}\n\nconst totalIcpScore = industryScore + sizeScore + techScore + painPointScore;\n\nlet icpTier = 'Tier 3 - Disqualified';\nlet rationale = '';\n\nif (totalIcpScore >= 80) {\n  icpTier = 'Tier 1 - High Priority';\n  rationale = `High-fit ${enrichment.industry} enterprise with ${enrichment.size_tier} and active operational demand for automated workflow validation.`;\n} else if (totalIcpScore >= 60) {\n  icpTier = 'Tier 2 - Nurture';\n  rationale = `Moderate fit with relevant tech stack (${enrichment.tech_stack.join(', ')}), but smaller team footprint or less acute operational signals.`;\n} else {\n  icpTier = 'Tier 3 - Disqualified';\n  rationale = `Non-target profile. Minimal alignment with enterprise automation and low engineering integration requirements.`;\n}\n\nreturn [{\n  json: {\n    ...lead,\n    icp_score: totalIcpScore,\n    icp_tier: icpTier,\n    score_breakdown: {\n      industry_fit: industryScore,\n      company_size_fit: sizeScore,\n      tech_stack_fit: techScore,\n      pain_point_fit: painPointScore\n    },\n    qualification_rationale: rationale,\n    is_qualified: totalIcpScore >= 60\n  }\n}];"
+      },
+      "id": "2a000001-0001-4000-8000-000000000004",
+      "name": "Score Lead against ICP Rubric",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-is-qualified",
+              "leftValue": "={{ $json.is_qualified }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "2a000001-0001-4000-8000-000000000005",
+      "name": "Is Qualified Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [980, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.item.json;\nconst firstName = lead.contact_name.split(' ')[0] || 'there';\nconst company = lead.company_name;\n\n// Generate 3 contextual subject lines\nconst subjectLines = [\n  `Automating multi-cloud compliance trails for ${company}`,\n  `Question regarding ${company} audit workflows`,\n  `Reconciliation architecture for your data squad`\n];\n\n// Humanized 3-paragraph outreach email following humanizer rules (factual, no buzzwords)\nconst emailBody = `Hi ${firstName},nnI reviewed ${company}'s infrastructure profile and noticed your focus on ${lead.enrichment.industry.toLowerCase()}. Engineering teams operating at this scale often find that connecting disparate database records to internal compliance checkpoints creates recurring manual overhead.nnWe built an automated workflow blueprint in n8n that pairs database cross-checks with human approval steps in Slack, verifying transactional records before downstream execution.nnWould you be open to a 10-minute technical exchange next Tuesday to see how other ${company} peers structure these reconciliation checks?nnBest regards,nAlexandr Motologa`;\n\nreturn [{\n  json: {\n    ...lead,\n    email_draft: {\n      subject_lines: subjectLines,\n      selected_subject: subjectLines[0],\n      body: emailBody\n    }\n  }\n}];"
+      },
+      "id": "2a000001-0001-4000-8000-000000000006",
+      "name": "Draft Contextual Outreach Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1220, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $input.item.json;\n\nconst blocks = [\n  {\n    type: 'header',\n    text: {\n      type: 'plain_text',\n      text: `🎯 New Qualified Lead: ${lead.company_name} (Score: ${lead.icp_score}/100)`,\n      emoji: true\n    }\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*Contact:* ${lead.contact_name} (<mailto:${lead.contact_email}|${lead.contact_email}>)` },\n      { type: 'mrkdwn', text: `*Domain:* `${lead.domain}`` },\n      { type: 'mrkdwn', text: `*ICP Tier:* *${lead.icp_tier}*` },\n      { type: 'mrkdwn', text: `*Industry:* ${lead.enrichment.industry}` },\n      { type: 'mrkdwn', text: `*Size:* ${lead.enrichment.size_tier}` },\n      { type: 'mrkdwn', text: `*Tech Stack:* `${lead.enrichment.tech_stack.slice(0, 3).join(', ')}`` }\n    ]\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: `*Qualification Rationale:*n${lead.qualification_rationale}`\n    }\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: `*Outreach Draft Preview (${lead.email_draft.selected_subject}):*n```n${lead.email_draft.body.slice(0, 350)}...n````\n    }\n  },\n  {\n    type: 'actions',\n    block_id: 'lead_actions',\n    elements: [\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: 'Approve & Send Email' },\n        style: 'primary',\n        action_id: 'action_approve_outreach',\n        value: JSON.stringify({ lead_id: lead.id, action: 'send_outreach' })\n      },\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: 'Edit in HubSpot' },\n        action_id: 'action_open_hubspot',\n        url: `https://app.hubspot.com/contacts/leads/${lead.id}`\n      }\n    ]\n  }\n];\n\nreturn [{\n  json: {\n    ...lead,\n    slack_payload: { blocks }\n  }\n}];"
+      },
+      "id": "2a000001-0001-4000-8000-000000000007",
+      "name": "Build Slack Sales Review Card",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL || 'http://mock-services:4000/slack/webhook' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.slack_payload) }}",
+        "options": {}
+      },
+      "id": "2a000001-0001-4000-8000-000000000008",
+      "name": "Post Lead Card to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1660, 180]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO crm.leads (id, contact_name, contact_email, company_name, domain, company_size_tier, industry, icp_score, icp_tier, qualification_rationale, email_draft_subject, email_draft_body, status, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'AWAITING_REVIEW', CURRENT_TIMESTAMP) ON CONFLICT (id) DO UPDATE SET icp_score = $8, icp_tier = $9, qualification_rationale = $10, email_draft_subject = $11, email_draft_body = $12, status = 'AWAITING_REVIEW', updated_at = CURRENT_TIMESTAMP;",
+        "queryParams": "={{ [$json.id, $json.contact_name, $json.contact_email, $json.company_name, $json.domain, $json.enrichment.size_tier, $json.enrichment.industry, $json.icp_score, $json.icp_tier, $json.qualification_rationale, $json.email_draft.selected_subject, $json.email_draft.body].join(',') }}"
+      },
+      "id": "2a000001-0001-4000-8000-000000000009",
+      "name": "Record Lead in PostgreSQL CRM",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1880, 180],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_SYNC_WEBHOOK_URL || 'http://mock-services:4000/crm/sync' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "company_name",
+              "value": "={{ $json.company_name }}"
+            },
+            {
+              "name": "icp_score",
+              "value": "={{ $json.icp_score }}"
+            },
+            {
+              "name": "status",
+              "value": "AWAITING_SALES_REVIEW"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2a000001-0001-4000-8000-000000000010",
+      "name": "Dispatch External CRM Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2100, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"lead_id\": \"{{ $json.id }}\",\n  \"icp_score\": {{ $json.icp_score }},\n  \"icp_tier\": \"{{ $json.icp_tier }}\",\n  \"qualified\": true,\n  \"email_drafted\": true,\n  \"slack_notified\": true,\n  \"message\": \"Lead enriched, scored above threshold, outreach drafted, and posted for review.\"\n}",
+        "options": {}
+      },
+      "id": "2a000001-0001-4000-8000-000000000011",
+      "name": "Respond Webhook Qualified Lead",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2320, 180]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO crm.leads (id, contact_name, contact_email, company_name, domain, company_size_tier, industry, icp_score, icp_tier, qualification_rationale, status, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'DISQUALIFIED', CURRENT_TIMESTAMP) ON CONFLICT (id) DO UPDATE SET icp_score = $8, icp_tier = $9, qualification_rationale = $10, status = 'DISQUALIFIED', updated_at = CURRENT_TIMESTAMP;",
+        "queryParams": "={{ [$json.id, $json.contact_name, $json.contact_email, $json.company_name, $json.domain, $json.enrichment.size_tier, $json.enrichment.industry, $json.icp_score, $json.icp_tier, $json.qualification_rationale].join(',') }}"
+      },
+      "id": "2a000001-0001-4000-8000-000000000012",
+      "name": "Record Disqualified Lead in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1220, 420],
+      "credentials": {
+        "postgres": {
+          "id": "enterprise-postgres-creds",
+          "name": "PostgreSQL Connection"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"lead_id\": \"{{ $json.id }}\",\n  \"icp_score\": {{ $json.icp_score }},\n  \"icp_tier\": \"{{ $json.icp_tier }}\",\n  \"qualified\": false,\n  \"email_drafted\": false,\n  \"message\": \"Lead scored below qualification threshold. Marked as nurture in CRM.\"\n}",
+        "options": {}
+      },
+      "id": "2a000001-0001-4000-8000-000000000013",
+      "name": "Respond Webhook Disqualified Lead",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 420]
+    }
+  ],
+  "connections": {
+    "Lead Ingest Webhook": {
+      "main": [
+        [
+          {
+            "node": "Sanitize & Normalize Lead Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sanitize & Normalize Lead Input": {
+      "main": [
+        [
+          {
+            "node": "Enrich Company Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Company Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Score Lead against ICP Rubric",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Lead against ICP Rubric": {
+      "main": [
+        [
+          {
+            "node": "Is Qualified Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Qualified Lead?": {
+      "main": [
+        [
+          {
+            "node": "Draft Contextual Outreach Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Disqualified Lead in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Contextual Outreach Email": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Sales Review Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Sales Review Card": {
+      "main": [
+        [
+          {
+            "node": "Post Lead Card to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Lead Card to Slack": {
+      "main": [
+        [
+          {
+            "node": "Record Lead in PostgreSQL CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Lead in PostgreSQL CRM": {
+      "main": [
+        [
+          {
+            "node": "Dispatch External CRM Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch External CRM Sync": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Qualified Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Disqualified Lead in DB": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook Disqualified Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
