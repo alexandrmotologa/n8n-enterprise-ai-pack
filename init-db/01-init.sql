@@ -8,6 +8,7 @@ CREATE SCHEMA IF NOT EXISTS erp;
 CREATE SCHEMA IF NOT EXISTS crm;
 CREATE SCHEMA IF NOT EXISTS rag;
 CREATE SCHEMA IF NOT EXISTS audit;
+CREATE SCHEMA IF NOT EXISTS analytics;
 
 -- ============================================================================
 -- ERP SCHEMA (Accounts Payable & 3-Way Matching)
@@ -94,8 +95,11 @@ CREATE TABLE IF NOT EXISTS crm.leads (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_crm_leads_email ON crm.leads(contact_email);
+CREATE INDEX IF NOT EXISTS idx_crm_leads_domain ON crm.leads(domain);
+
 -- ============================================================================
--- RAG SCHEMA (Vector Store with pgvector)
+-- RAG SCHEMA (Vector Store & Retrieval Feedback)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS rag.document_embeddings (
@@ -107,14 +111,39 @@ CREATE TABLE IF NOT EXISTS rag.document_embeddings (
     content TEXT NOT NULL,
     embedding vector(1536),
     metadata JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_doc_chunk UNIQUE (doc_id, chunk_index)
 );
 
--- Index on vector column for cosine distance
 CREATE INDEX IF NOT EXISTS idx_doc_embeddings_cosine
 ON rag.document_embeddings
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 10);
+
+CREATE TABLE IF NOT EXISTS rag.query_feedback (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(128),
+    customer_id VARCHAR(128),
+    query TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    rating VARCHAR(32) NOT NULL,
+    comment TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- ANALYTICS SCHEMA (Workflow Performance & Metrics)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS analytics.workflow_events (
+    id SERIAL PRIMARY KEY,
+    workflow_id VARCHAR(64) NOT NULL,
+    execution_type VARCHAR(64) NOT NULL,
+    metric_name VARCHAR(64) NOT NULL,
+    metric_value NUMERIC(12, 4) NOT NULL,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ============================================================================
 -- SEED DATA

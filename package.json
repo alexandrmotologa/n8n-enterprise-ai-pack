@@ -11,6 +11,7 @@
     "validate": "node scripts/validate_workflows.js",
     "seed": "node scripts/seed_databases.js",
     "generate-invoices": "node scripts/generate_sample_invoices.js",
+    "import": "node scripts/import_workflows.js",
     "mock": "node mock-services/server.js"
   },
   "dependencies": {

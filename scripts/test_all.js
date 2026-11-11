@@ -125,6 +125,12 @@ async function runTestSuite() {
       body: { lead_id: 'LEAD-901', company_name: 'DataDrive Technologies' }
     });
     assert(crmSyncRes.statusCode === 200 && crmSyncRes.json.status === 'SUCCESS', 'POST /crm/sync processes CRM lead sync');
+
+    const dashRes = await httpRequest({ port: mockPort, path: '/dashboard' });
+    assert(
+      dashRes.statusCode === 200 && dashRes.data.includes('n8n Enterprise AI Pack'),
+      'GET /dashboard serves interactive HTML inspection UI'
+    );
   } catch (err) {
     assert(false, 'Mock Simulation Server Tests', err.message);
   }
@@ -162,10 +168,11 @@ async function runTestSuite() {
 
     // Test 3-way match & tolerance evaluation logic
     const evalToleranceCode = wf1.nodes.find(n => n.name === 'Evaluate 3-Way Match & Variance').parameters.jsCode;
-    
+    const defaultEnv = { INVOICE_VARIANCE_THRESHOLD_PCT: '0.5', INVOICE_HITL_AMOUNT_THRESHOLD: '2000' };
+
     // Scenario A: Exact Match, Under $2,000 threshold -> AUTO_APPROVE
     {
-      const evalFuncA = new Function('$input', '$', evalToleranceCode);
+      const evalFuncA = new Function('$input', '$', '$env', evalToleranceCode);
       const mockEnvA = {
         first: () => ({ json: mathResult[0].json })
       };
@@ -174,22 +181,30 @@ async function runTestSuite() {
           json: {
             po_number: 'PO-2026-001',
             vendor_tax_id: 'US-94281901',
-            total_amount: '1620.00'
+            total_amount: '1620.00',
+            po_items: [
+              { sku: 'CLOUD-SUB-M', quantity: 1, unit_price: 1000.00 },
+              { sku: 'SUPP-PREM', quantity: 1, unit_price: 500.00 }
+            ]
           }
         }]
       };
-      const resA = evalFuncA(mockInputA, () => mockEnvA);
+      const resA = evalFuncA(mockInputA, () => mockEnvA, defaultEnv);
       assert(resA[0].json.decision === 'AUTO_APPROVE', 'Auto-Approve: variance 0% and total < $2,000');
     }
 
     // Scenario B: High Value Invoice >= $2,000 -> REQUIRE_HUMAN_APPROVAL
     {
-      const evalFuncB = new Function('$input', '$', evalToleranceCode);
+      const evalFuncB = new Function('$input', '$', '$env', evalToleranceCode);
       const highValInvoice = {
         ...mathResult[0].json,
         invoice_number: 'INV-2026-0921',
         total_amount: 12960.00,
-        vendor_tax_id: 'US-88391024'
+        vendor_tax_id: 'US-88391024',
+        line_items: [
+          { sku: 'FRT-AIR-EXP', quantity: 4, unit_price: 2500.00 },
+          { sku: 'CUST-CLEAR', quantity: 4, unit_price: 500.00 }
+        ]
       };
       const mockEnvB = { first: () => ({ json: highValInvoice }) };
       const mockInputB = {
@@ -197,22 +212,27 @@ async function runTestSuite() {
           json: {
             po_number: 'PO-2026-002',
             vendor_tax_id: 'US-88391024',
-            total_amount: '12960.00'
+            total_amount: '12960.00',
+            po_items: [
+              { sku: 'FRT-AIR-EXP', quantity: 4, unit_price: 2500.00 },
+              { sku: 'CUST-CLEAR', quantity: 4, unit_price: 500.00 }
+            ]
           }
         }]
       };
-      const resB = evalFuncB(mockInputB, () => mockEnvB);
+      const resB = evalFuncB(mockInputB, () => mockEnvB, defaultEnv);
       assert(resB[0].json.decision === 'REQUIRE_HUMAN_APPROVAL', 'Human Review: invoice total >= $2,000 threshold requires signoff');
     }
 
     // Scenario C: Discrepancy > 0.5% Variance -> REQUIRE_HUMAN_APPROVAL
     {
-      const evalFuncC = new Function('$input', '$', evalToleranceCode);
+      const evalFuncC = new Function('$input', '$', '$env', evalToleranceCode);
       const discrepancyInvoice = {
         ...mathResult[0].json,
         invoice_number: 'INV-2026-8841',
         total_amount: 939.60,
-        vendor_tax_id: 'US-11029482'
+        vendor_tax_id: 'US-11029482',
+        line_items: [{ sku: 'DEV-ENV-POD', quantity: 2, unit_price: 435.00 }]
       };
       const mockEnvC = { first: () => ({ json: discrepancyInvoice }) };
       const mockInputC = {
@@ -220,18 +240,19 @@ async function runTestSuite() {
           json: {
             po_number: 'PO-2026-003',
             vendor_tax_id: 'US-11029482',
-            total_amount: '864.00'
+            total_amount: '864.00',
+            po_items: [{ sku: 'DEV-ENV-POD', quantity: 2, unit_price: 400.00 }]
           }
         }]
       };
-      const resC = evalFuncC(mockInputC, () => mockEnvC);
+      const resC = evalFuncC(mockInputC, () => mockEnvC, defaultEnv);
       assert(resC[0].json.decision === 'REQUIRE_HUMAN_APPROVAL', 'Discrepancy Gate: variance of 8.75% correctly triggers HITL review');
       assert(resC[0].json.variance_pct > 8.0, 'Calculated variance exceeds 8%');
     }
 
     // Scenario D: Tax ID Mismatch Fraud Alert -> SECURITY_ALERT
     {
-      const evalFuncD = new Function('$input', '$', evalToleranceCode);
+      const evalFuncD = new Function('$input', '$', '$env', evalToleranceCode);
       const spoofedInvoice = {
         ...mathResult[0].json,
         invoice_number: 'INV-2026-9999',
@@ -248,11 +269,53 @@ async function runTestSuite() {
           }
         }]
       };
-      const resD = evalFuncD(mockInputD, () => mockEnvD);
+      const resD = evalFuncD(mockInputD, () => mockEnvD, defaultEnv);
       assert(resD[0].json.decision === 'SECURITY_ALERT', 'Security Gate: Vendor Tax ID mismatch flags immediate fraud alert');
     }
 
-    // Scenario E: Slack Callback Action Parser
+    // Scenario E: Duplicate invoice detection -> DUPLICATE_REJECTED
+    {
+      const evalFuncE = new Function('$input', '$', '$env', evalToleranceCode);
+      const mockEnvE = { first: () => ({ json: mathResult[0].json }) };
+      const mockInputE = {
+        all: () => [{
+          json: {
+            po_number: 'PO-2026-001',
+            vendor_tax_id: 'US-94281901',
+            total_amount: '1620.00',
+            existing_invoice_status: 'AUTO_APPROVED'
+          }
+        }]
+      };
+      const resE = evalFuncE(mockInputE, () => mockEnvE, defaultEnv);
+      assert(resE[0].json.decision === 'DUPLICATE_REJECTED', 'Duplicate Prevention: already settled invoice blocked from reprocessing');
+    }
+
+    // Scenario F: Line-item SKU mismatch detection
+    {
+      const evalFuncF = new Function('$input', '$', '$env', evalToleranceCode);
+      const mismatchedItemInvoice = {
+        ...mathResult[0].json,
+        total_amount: 1500.00,
+        line_items: [{ sku: 'UNEXPECTED-UNLISTED-SKU', quantity: 1, unit_price: 1500.00 }]
+      };
+      const mockEnvF = { first: () => ({ json: mismatchedItemInvoice }) };
+      const mockInputF = {
+        all: () => [{
+          json: {
+            po_number: 'PO-2026-001',
+            vendor_tax_id: 'US-94281901',
+            total_amount: '1500.00',
+            po_items: [{ sku: 'CLOUD-SUB-M', quantity: 1, unit_price: 1000.00 }]
+          }
+        }]
+      };
+      const resF = evalFuncF(mockInputF, () => mockEnvF, defaultEnv);
+      assert(resF[0].json.decision === 'REQUIRE_HUMAN_APPROVAL', 'Line-item gate: unexpected SKU triggers human review');
+      assert(resF[0].json.line_discrepancies.length > 0, 'Line discrepancies documented in evaluation output');
+    }
+
+    // Scenario G: Slack Callback Action Parser (Approved)
     {
       const callbackCode = wf1.nodes.find(n => n.name === 'Parse Slack Callback Action').parameters.jsCode;
       const callbackFunc = new Function('$input', 'require', callbackCode);
@@ -261,7 +324,7 @@ async function runTestSuite() {
           json: {
             actions: [{
               action_id: 'action_approve_invoice',
-              value: JSON.stringify({ token: 'tok_sample', invoice_number: 'INV-2026-0012', action: 'approve' })
+              value: JSON.stringify({ token: 'tok_sample', invoice_number: 'INV-2026-0012', action: 'approve', expires_at: new Date(Date.now() + 3600000).toISOString() })
             }],
             user: { username: 'alexandr.motologa' }
           }
@@ -270,6 +333,26 @@ async function runTestSuite() {
       const cbRes = callbackFunc(mockSlackReq, require);
       assert(cbRes[0].json.status === 'MANUALLY_APPROVED', 'Slack Callback parses approval button action to MANUALLY_APPROVED');
       assert(cbRes[0].json.decision_by === 'alexandr.motologa', 'Slack Callback extracts approver identity');
+    }
+
+    // Scenario H: Slack Callback Token Expiration (Expired)
+    {
+      const callbackCode = wf1.nodes.find(n => n.name === 'Parse Slack Callback Action').parameters.jsCode;
+      const callbackFunc = new Function('$input', 'require', callbackCode);
+      const expiredSlackReq = {
+        item: {
+          json: {
+            actions: [{
+              action_id: 'action_approve_invoice',
+              value: JSON.stringify({ token: 'tok_sample', invoice_number: 'INV-2026-0012', action: 'approve', expires_at: '2020-01-01T00:00:00.000Z' })
+            }],
+            user: { username: 'alexandr.motologa' }
+          }
+        }
+      };
+      const expiredRes = callbackFunc(expiredSlackReq, require);
+      assert(expiredRes[0].json.status === 'EXPIRED', 'Slack Callback flags expired approval token');
+      assert(expiredRes[0].json.is_expired === true, 'is_expired boolean is true');
     }
   }
 
@@ -389,11 +472,15 @@ async function runTestSuite() {
       const disputeRes = evalRAGFunc(mockChunksDispute, () => mockEnvDispute);
       assert(disputeRes[0].json.requires_escalation === true, 'Dispute / cancellation inquiry triggers human escalation gate');
     }
+
+    // Case 3: RAG Feedback Webhook node existence
+    const feedbackNode = wf3.nodes.find(n => n.name === 'RAG Feedback Webhook');
+    assert(feedbackNode !== undefined, 'RAG Feedback Webhook endpoint configured in workflow');
   }
 
   console.log('\n[Suite 5: Reusable Sub-Workflows Verification]');
   {
-    // Error Handler
+    // 1. Error Handler
     const errWfPath = path.resolve(__dirname, '../sub-workflows/error-handler-slack.json');
     const errWf = JSON.parse(fs.readFileSync(errWfPath, 'utf8'));
     const formatErrCode = errWf.nodes.find(n => n.name === 'Format Incident Card').parameters.jsCode;
@@ -415,7 +502,7 @@ async function runTestSuite() {
     assert(errRes[0].json.failed_node === 'Fetch PO from PostgreSQL', 'Error Handler extracts failed node name');
     assert(errRes[0].json.slack_payload.blocks[0].text.text.includes('Failure'), 'Error Handler builds Slack incident card');
 
-    // PII Masking
+    // 2. PII Masking
     const piiWfPath = path.resolve(__dirname, '../sub-workflows/pii-masking-helper.json');
     const piiWf = JSON.parse(fs.readFileSync(piiWfPath, 'utf8'));
     const piiScrubCode = piiWf.nodes.find(n => n.name === 'Regex Scrub Sensitive Patterns').parameters.jsCode;
@@ -430,6 +517,23 @@ async function runTestSuite() {
     assert(!piiRes[0].json.sanitized_text.includes('4111111111111234'), 'PII Masking scrubs credit card number');
     assert(piiRes[0].json.tokens_masked_count === 4, 'PII Masking identifies all 4 sensitive entities');
     assert(Object.keys(piiRes[0].json.mapping_dictionary).length === 4, 'Mapping dictionary retains token lookup keys');
+
+    // 3. Exponential Backoff & Retry
+    const retryWfPath = path.resolve(__dirname, '../sub-workflows/retry-with-backoff.json');
+    const retryWf = JSON.parse(fs.readFileSync(retryWfPath, 'utf8'));
+    const backoffCode = retryWf.nodes.find(n => n.name === 'Calculate Backoff Schedule').parameters.jsCode;
+    const backoffFunc = new Function('$input', backoffCode);
+    const retryRes = backoffFunc({
+      item: {
+        json: {
+          target_url: 'https://api.erp.internal/pay',
+          max_retries: 3,
+          initial_delay_ms: 500
+        }
+      }
+    });
+    assert(retryRes[0].json.retry_schedule.length === 3, 'Retry sub-workflow generates 3 backoff schedules');
+    assert(retryRes[0].json.retry_schedule[1].delay_ms >= 1000, 'Exponential backoff increases delay per attempt');
   }
 
   // Close mock server

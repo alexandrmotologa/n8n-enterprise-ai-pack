@@ -40,6 +40,126 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Interactive HTML Inspection Dashboard
+app.get('/dashboard', (req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>n8n Enterprise Mock Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #f8fafc; color: #1e293b; padding: 24px; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 700; color: #0f172a; }
+    .badge { background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: white; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .stat-title { font-size: 13px; color: #64748b; margin-bottom: 4px; }
+    .stat-val { font-size: 28px; font-weight: 700; color: #0f172a; }
+    .section { background: white; padding: 20px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 24px; }
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; justify-content: space-between; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 12px; background: #f1f5f9; color: #475569; font-weight: 600; }
+    td { padding: 10px 12px; border-top: 1px solid #e2e8f0; vertical-align: top; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; max-height: 250px; }
+    .empty { color: #94a3b8; font-style: italic; padding: 16px 0; }
+    .btn { background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
+    .btn:hover { background: #2563eb; }
+    .btn-danger { background: #ef4444; }
+    .btn-danger:hover { background: #dc2626; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>n8n Enterprise AI Pack — Mock Services Dashboard</h1>
+      <p style="font-size: 13px; color: #64748b; margin-top: 4px;">Local inspection server running on port ${port} (Uptime: ${Math.floor(process.uptime())}s)</p>
+    </div>
+    <div>
+      <span class="badge">STANDALONE TESTBED ACTIVE</span>
+      <a href="/dashboard" class="btn" style="margin-left: 8px; text-decoration: none; display: inline-block;">Refresh</a>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-title">Slack Notifications</div>
+      <div class="stat-val">${slackMessages.length}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">ERP Payments Dispatched</div>
+      <div class="stat-val">${erpPayments.length}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-title">CRM Leads Synced</div>
+      <div class="stat-val">${crmUpdates.length}</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Recent Slack Webhook Notifications <span>(${slackMessages.length} total)</span></h2>
+    ${slackMessages.length === 0 ? '<div class="empty">No Slack messages received yet. Run tests or trigger workflows to inspect.</div>' : `
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Timestamp</th><th>Payload Preview</th></tr>
+      </thead>
+      <tbody>
+        ${slackMessages.slice(-5).reverse().map(m => `
+          <tr>
+            <td style="font-family: monospace; font-size: 11px;">${m.id}</td>
+            <td style="white-space: nowrap;">${m.receivedAt.split('T')[1].replace('Z', '')}</td>
+            <td><pre>${JSON.stringify(m.body, null, 2)}</pre></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`}
+  </div>
+
+  <div class="section">
+    <h2>ERP Payments Processed <span>(${erpPayments.length} total)</span></h2>
+    ${erpPayments.length === 0 ? '<div class="empty">No ERP payments queued yet.</div>' : `
+    <table>
+      <thead>
+        <tr><th>Payment ID</th><th>Received At</th><th>Payload Details</th></tr>
+      </thead>
+      <tbody>
+        ${erpPayments.slice(-5).reverse().map(p => `
+          <tr>
+            <td style="font-family: monospace; font-weight: 600;">${p.paymentId}</td>
+            <td>${p.receivedAt}</td>
+            <td><pre>${JSON.stringify(p.payload, null, 2)}</pre></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`}
+  </div>
+
+  <div class="section">
+    <h2>CRM Sync Updates <span>(${crmUpdates.length} total)</span></h2>
+    ${crmUpdates.length === 0 ? '<div class="empty">No CRM updates logged yet.</div>' : `
+    <table>
+      <thead>
+        <tr><th>Sync ID</th><th>Contact ID</th><th>Timestamp</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+        ${crmUpdates.slice(-5).reverse().map(c => `
+          <tr>
+            <td style="font-family: monospace;">${c.syncId}</td>
+            <td>${c.payload?.lead_id || 'N/A'}</td>
+            <td>${c.receivedAt}</td>
+            <td><pre>${JSON.stringify(c.payload, null, 2)}</pre></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`}
+  </div>
+</body>
+</html>`;
+  res.send(html);
+});
+
 // OpenAI compatible /v1/chat/completions
 app.post('/v1/chat/completions', (req, res) => {
   const { messages, model, response_format } = req.body;

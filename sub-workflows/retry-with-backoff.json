@@ -1,0 +1,101 @@
+{
+  "name": "Exponential Backoff & Retry Sub-Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retry-dispatch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "r1000001-0001-4000-8000-000000000001",
+      "name": "Retry Request Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [100, 300],
+      "webhookId": "retry-dispatch-trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.item.json.body || $input.item.json;\n\nconst targetUrl = input.target_url || '';\nconst method = (input.method || 'POST').toUpperCase();\nconst payload = input.payload || input.body || {};\nconst headers = input.headers || {};\nconst maxRetries = Number(input.max_retries || 3);\nconst initialDelayMs = Number(input.initial_delay_ms || 1000);\n\n// Compute schedule for exponential backoff with full jitter\nconst retrySchedule = [];\nfor (let i = 1; i <= maxRetries; i++) {\n  const baseDelay = initialDelayMs * Math.pow(2, i - 1);\n  const jitter = Math.floor(Math.random() * 250);\n  retrySchedule.push({\n    attempt: i,\n    delay_ms: baseDelay + jitter\n  });\n}\n\nreturn [{\n  json: {\n    target_url: targetUrl,\n    method,\n    payload,\n    headers,\n    max_retries: maxRetries,\n    retry_schedule: retrySchedule,\n    started_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "r1000001-0001-4000-8000-000000000002",
+      "name": "Calculate Backoff Schedule",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "method": "={{ $json.method }}",
+        "url": "={{ $json.target_url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "retry": {
+            "retry": {
+              "maxTries": 3,
+              "waitBetweenTries": 1000
+            }
+          }
+        }
+      },
+      "id": "r1000001-0001-4000-8000-000000000003",
+      "name": "Execute Resilient HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"SUCCESS\",\n  \"dispatched\": true,\n  \"target_url\": \"{{ $('Calculate Backoff Schedule').first().json.target_url }}\",\n  \"response\": {{ JSON.stringify($json) }},\n  \"completed_at\": \"{{ new Date().toISOString() }}\"\n}",
+        "options": {}
+      },
+      "id": "r1000001-0001-4000-8000-000000000004",
+      "name": "Respond Retry Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [760, 300]
+    }
+  ],
+  "connections": {
+    "Retry Request Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Calculate Backoff Schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Backoff Schedule": {
+      "main": [
+        [
+          {
+            "node": "Execute Resilient HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Resilient HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Respond Retry Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

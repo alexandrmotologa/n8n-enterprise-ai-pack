@@ -6,7 +6,8 @@ const workflowFiles = [
   'workflows/02-lead-enrichment/workflow.json',
   'workflows/03-rag-support-copilot/workflow.json',
   'sub-workflows/error-handler-slack.json',
-  'sub-workflows/pii-masking-helper.json'
+  'sub-workflows/pii-masking-helper.json',
+  'sub-workflows/retry-with-backoff.json'
 ];
 
 let totalErrors = 0;

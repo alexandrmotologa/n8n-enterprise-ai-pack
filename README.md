@@ -1,6 +1,6 @@
 # n8n Enterprise AI Pack
 
-Production grade enterprise automation templates for n8n. This repository contains three flagship workflows, two operational sub-workflows, database schemas with pgvector, and a local Docker environment with a mock simulation server for offline execution.
+Production grade enterprise automation templates for n8n. This repository contains three flagship workflows, three operational sub-workflows, database schemas with pgvector, an automated workflow importer, and a local Docker environment with a mock simulation server and HTML inspection dashboard.
 
 ## Workflows overview
 
@@ -8,11 +8,11 @@ Production grade enterprise automation templates for n8n. This repository contai
 Location: `workflows/01-invoice-auditor/`
 
 Performs accounts payable automation with 3-way matching and Slack approval gates:
-- Validates invoice line items, tax calculations, and subtotal consistency.
-- Queries PostgreSQL purchase orders (`erp.purchase_orders` and `erp.purchase_order_items`).
-- Automatically approves orders under $2,000 with variance below 0.5%.
-- Generates HMAC approval tokens and Slack Block Kit cards for orders above $2,000 or variances exceeding 0.5%.
-- Listens for interactive callback webhooks (`POST /webhook/invoice-approval-callback`), verifies signatures, and updates ERP database records.
+- Validates invoice line items, SKU alignment, tax calculations, and subtotal consistency.
+- Queries PostgreSQL purchase orders (`erp.purchase_orders` and `erp.purchase_order_items`) while checking for previous settlements to reject duplicate submissions (`DUPLICATE_REJECTED`).
+- Automatically approves orders under $2,000 with variance below 0.5% (both configurable via environment variables).
+- Generates HMAC approval tokens with 48-hour expiration timestamps and Slack Block Kit cards for orders above $2,000, variances exceeding 0.5%, or unlisted SKUs.
+- Listens for interactive callback webhooks (`POST /webhook/invoice-approval-callback`), checks token validity, updates ERP database records, and blocks late actions on expired tokens.
 
 ### 2. Multi-agent B2B lead enrichment and outreach copilot
 Location: `workflows/02-lead-enrichment/`
@@ -22,22 +22,24 @@ Automates sales qualification and outbound email drafting:
 - Normalizes domains and gathers company infrastructure profiles.
 - Evaluates leads against a 4-pillar ICP scoring rubric (Industry, Team Size, Tech Stack, Pain Points) from 0 to 100.
 - Drafts contextual three-paragraph emails and three subject lines for leads scoring 60 or higher.
-- Posts review cards to `#sales-approvals` in Slack with one-click dispatch actions, syncing enriched records to `crm.leads`.
+- Posts review cards to `#sales-approvals` in Slack with one-click dispatch actions, syncing enriched records to `crm.leads` with domain-level deduplication.
 
 ### 3. Continuous RAG knowledge ingestion and support agent
 Location: `workflows/03-rag-support-copilot/`
 
-Provides continuous documentation indexing and grounded customer support:
-- Ingestion pipeline (`POST /webhook/rag-ingest`) chunks markdown documents by header sections (`#`, `##`), generates 1536-dimensional embeddings, and writes to PostgreSQL `rag.document_embeddings` with pgvector.
+Provides continuous documentation indexing, grounded customer support, and an ongoing retrieval feedback loop:
+- Ingestion pipeline (`POST /webhook/rag-ingest`) chunks markdown documents by header sections (`#`, `##`), generates 1536-dimensional embeddings, and writes to PostgreSQL `rag.document_embeddings` with pgvector. Duplicate chunk index insertions update existing vectors in place.
 - Support query pipeline (`POST /webhook/support-query`) runs vector similarity searches to retrieve the top 3 relevant sections.
 - Evaluates retrieval confidence: queries scoring below 0.70 or containing account dispute keywords route directly to tier-2 support in Slack.
 - Grounded responses enforce source citations in the format `[Source: Document - Section]`.
+- Retrieval quality feedback endpoint (`POST /webhook/rag-feedback`) records user satisfaction ratings to `rag.query_feedback`.
 
 ### Operational sub-workflows
 Location: `sub-workflows/`
 
 - `error-handler-slack.json`: Attaches to the n8n Error Trigger, formats execution failure details into a Slack Block Kit incident card with direct links to the n8n run, and logs incidents to PostgreSQL `audit.logs`.
 - `pii-masking-helper.json`: Scrubs email addresses, phone numbers, tax identification numbers, and credit cards before text reaches external language models.
+- `retry-with-backoff.json`: Wraps transient HTTP requests with exponential backoff and randomized jitter across three configurable retry attempts.
 
 ## Local environment setup
 
@@ -62,16 +64,27 @@ docker compose up -d
 - Qdrant Vector DB: `http://localhost:6333`
 - MailHog UI: `http://localhost:8025` (SMTP on `1025`)
 - Mock Simulation Server: `http://localhost:4000`
+- Mock Inspection Dashboard: `http://localhost:4000/dashboard`
+
+### Importing workflows into n8n
+
+Once n8n is running, import all six workflows with a single command:
+
+```bash
+npm run import
+# or via Makefile
+make import
+```
 
 ## Automated test suite
 
-Run the test suite to validate workflow JSON schemas, math tolerance calculations, Slack Block Kit generation, and retrieval logic:
+Run the test suite to validate workflow JSON schemas, math tolerance calculations, Slack Block Kit generation, duplicate prevention, token expiration, and retrieval logic:
 
 ```bash
 # Install dependencies
 npm install
 
-# Run schema validation and full test runner
+# Run schema validation and full test runner (48 automated assertions)
 npm test
 ```
 
@@ -101,6 +114,8 @@ n8n-enterprise-ai-pack/
 │   └── server.js
 ├── scripts/
 │   ├── generate_sample_invoices.js
+│   ├── import_workflows.js
+│   ├── patch_improvements.js
 │   ├── seed_databases.js
 │   ├── test_all.js
 │   ├── test_all.ps1
@@ -109,7 +124,8 @@ n8n-enterprise-ai-pack/
 ├── sub-workflows/
 │   ├── README.md
 │   ├── error-handler-slack.json
-│   └── pii-masking-helper.json
+│   ├── pii-masking-helper.json
+│   └── retry-with-backoff.json
 ├── workflows/
 │   ├── 01-invoice-auditor/
 │   │   ├── README.md

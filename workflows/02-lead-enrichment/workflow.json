@@ -12,7 +12,10 @@
       "name": "Lead Ingest Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [100, 300],
+      "position": [
+        100,
+        300
+      ],
       "webhookId": "lead-ingest-trigger"
     },
     {
@@ -23,7 +26,10 @@
       "name": "Sanitize & Normalize Lead Input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [320, 300]
+      "position": [
+        320,
+        300
+      ]
     },
     {
       "parameters": {
@@ -33,7 +39,10 @@
       "name": "Enrich Company Intelligence",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [540, 300]
+      "position": [
+        540,
+        300
+      ]
     },
     {
       "parameters": {
@@ -43,7 +52,10 @@
       "name": "Score Lead against ICP Rubric",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [760, 300]
+      "position": [
+        760,
+        300
+      ]
     },
     {
       "parameters": {
@@ -71,7 +83,10 @@
       "name": "Is Qualified Lead?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [980, 300]
+      "position": [
+        980,
+        300
+      ]
     },
     {
       "parameters": {
@@ -81,7 +96,10 @@
       "name": "Draft Contextual Outreach Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1220, 180]
+      "position": [
+        1220,
+        180
+      ]
     },
     {
       "parameters": {
@@ -91,7 +109,10 @@
       "name": "Build Slack Sales Review Card",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1440, 180]
+      "position": [
+        1440,
+        180
+      ]
     },
     {
       "parameters": {
@@ -106,7 +127,10 @@
       "name": "Post Lead Card to Slack",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1660, 180]
+      "position": [
+        1660,
+        180
+      ]
     },
     {
       "parameters": {
@@ -118,7 +142,10 @@
       "name": "Record Lead in PostgreSQL CRM",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1880, 180],
+      "position": [
+        1880,
+        180
+      ],
       "credentials": {
         "postgres": {
           "id": "enterprise-postgres-creds",
@@ -157,7 +184,10 @@
       "name": "Dispatch External CRM Sync",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2100, 180]
+      "position": [
+        2100,
+        180
+      ]
     },
     {
       "parameters": {
@@ -169,7 +199,10 @@
       "name": "Respond Webhook Qualified Lead",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2320, 180]
+      "position": [
+        2320,
+        180
+      ]
     },
     {
       "parameters": {
@@ -181,7 +214,10 @@
       "name": "Record Disqualified Lead in DB",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1220, 420],
+      "position": [
+        1220,
+        420
+      ],
       "credentials": {
         "postgres": {
           "id": "enterprise-postgres-creds",
@@ -199,7 +235,10 @@
       "name": "Respond Webhook Disqualified Lead",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1440, 420]
+      "position": [
+        1440,
+        420
+      ]
     }
   ],
   "connections": {
