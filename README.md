@@ -1,16 +1,66 @@
-# n8n Enterprise AI Pack
+<p align="center">
+  <img src="docs/images/logo.png?raw=true" alt="n8n Enterprise AI Pack Logo" width="130" style="border-radius: 24px;" />
+</p>
 
-Production grade enterprise automation templates for n8n. This repository contains three flagship workflows, three operational sub-workflows, database schemas with pgvector, an automated workflow importer, and a local Docker environment with a mock simulation server and HTML inspection dashboard.
+<h1 align="center">n8n Enterprise AI Pack</h1>
 
-## Workflows overview
+<p align="center">
+  Production-grade enterprise automation workflows with multimodal 3-way invoice matching, autonomous B2B lead qualification, continuous pgvector RAG memory, and human-in-the-loop Slack governance.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Workflows-100%25_Functional-0284c7?style=flat-square" alt="Workflows Functional" />
+  <img src="https://img.shields.io/badge/Test_Suite-48%2F48_Passing-10b981?style=flat-square" alt="Tests Passing" />
+  <img src="https://img.shields.io/badge/Database-PostgreSQL_+_pgvector-336791?style=flat-square" alt="Postgres pgvector" />
+  <img src="https://img.shields.io/badge/Vector_DB-Qdrant-dc2626?style=flat-square" alt="Qdrant" />
+  <img src="https://img.shields.io/badge/License-MIT-gray?style=flat-square" alt="License MIT" />
+</p>
+
+<p align="center">
+  <img src="docs/images/n8n-enterprise-ai-pack_demo.gif" alt="n8n Enterprise AI Pack End-to-End Execution Demo" width="100%" style="border-radius: 12px; border: 1px solid #1e293b;" />
+</p>
+
+## Overview
+
+The n8n Enterprise AI Pack delivers production-ready automation architectures designed for high-compliance enterprise environments. Every workflow in this repository enforces deterministic database cross-checks, cryptographic approval tokens, resilient error handling, and human-in-the-loop (HITL) approval gates before mutating downstream ledgers or contacting clients.
+
+The repository includes a self-contained local orchestration stack powered by Docker Compose, an in-memory simulation server with an interactive HTML inspection cockpit, database migrations with pgvector, and an automated test runner with 48 assertions verifying every decision gate.
+
+## Operations cockpit and visual inspection
+
+The local testbed provides an operations cockpit accessible at `http://localhost:4000/dashboard`, rendering real-time Slack Block Kit review cards, settlement confirmations, and CRM lead ingestion pipelines.
+
+### Desktop cockpit (1440x900)
+
+![Desktop Operations Cockpit](docs/images/dashboard_desktop.png)
+
+### Mobile responsive interface (390x844)
+
+The cockpit interface adapts across all viewport sizes, enabling field controllers to inspect approval cards, system uptime, and transaction audits directly from mobile devices:
+
+<p align="center">
+  <img src="docs/images/dashboard_mobile.png" alt="Mobile Operations Cockpit" width="390" style="border-radius: 16px; border: 1px solid #334155;" />
+</p>
+
+### Interactive Slack Block Kit review card
+
+![Slack Block Kit Preview](docs/images/slack_block_kit_preview.png)
+
+### Terminal test runner verification
+
+![Terminal Test Run](docs/images/terminal_test_run.png)
+
+## Enterprise workflows
 
 ### 1. Multimodal financial invoice auditor and reconciler
 Location: `workflows/01-invoice-auditor/`
 
-Performs accounts payable automation with 3-way matching and Slack approval gates:
-- Validates invoice line items, SKU alignment, tax calculations, and subtotal consistency.
+Performs accounts payable automation with 3-way matching, line-item pricing checks, and Slack approval gates:
+- Ingests invoice PDFs via webhook (`POST /webhook/invoice-upload`) or scheduled file pollers.
+- Extracts line items, vendor tax IDs, invoice references, and totals using multimodal LLM extraction.
 - Queries PostgreSQL purchase orders (`erp.purchase_orders` and `erp.purchase_order_items`) while checking for previous settlements to reject duplicate submissions (`DUPLICATE_REJECTED`).
-- Automatically approves orders under $2,000 with variance below 0.5% (both configurable via environment variables).
+- Validates line-by-line item math, tax rates, and SKU alignment against purchase orders.
+- Automatically approves orders under $2,000 with variance below 0.5% (both thresholds configurable via environment variables).
 - Generates HMAC approval tokens with 48-hour expiration timestamps and Slack Block Kit cards for orders above $2,000, variances exceeding 0.5%, or unlisted SKUs.
 - Listens for interactive callback webhooks (`POST /webhook/invoice-approval-callback`), checks token validity, updates ERP database records, and blocks late actions on expired tokens.
 
@@ -19,9 +69,10 @@ Location: `workflows/02-lead-enrichment/`
 
 Automates sales qualification and outbound email drafting:
 - Ingests inbound leads via webhook (`POST /webhook/lead-ingest`).
-- Normalizes domains and gathers company infrastructure profiles.
+- Normalizes domains and gathers company infrastructure profiles using semantic token matching.
 - Evaluates leads against a 4-pillar ICP scoring rubric (Industry, Team Size, Tech Stack, Pain Points) from 0 to 100.
-- Drafts contextual three-paragraph emails and three subject lines for leads scoring 60 or higher.
+- Disqualifies low-fit leads (score below 60) without manual rep effort.
+- Drafts contextual three-paragraph emails and three distinct subject lines for qualified leads.
 - Posts review cards to `#sales-approvals` in Slack with one-click dispatch actions, syncing enriched records to `crm.leads` with domain-level deduplication.
 
 ### 3. Continuous RAG knowledge ingestion and support agent
@@ -64,7 +115,7 @@ docker compose up -d
 - Qdrant Vector DB: `http://localhost:6333`
 - MailHog UI: `http://localhost:8025` (SMTP on `1025`)
 - Mock Simulation Server: `http://localhost:4000`
-- Mock Inspection Dashboard: `http://localhost:4000/dashboard`
+- Operations Cockpit: `http://localhost:4000/dashboard`
 
 ### Importing workflows into n8n
 
@@ -105,7 +156,15 @@ n8n-enterprise-ai-pack/
 ├── .github/workflows/
 │   └── validate-workflows.yml
 ├── docs/
-│   └── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md
+│   └── images/
+│       ├── dashboard_desktop.png
+│       ├── dashboard_mobile.png
+│       ├── logo.png
+│       ├── logo.svg
+│       ├── n8n-enterprise-ai-pack_demo.gif
+│       ├── slack_block_kit_preview.png
+│       └── terminal_test_run.png
 ├── init-db/
 │   └── 01-init.sql
 ├── mock-services/
@@ -113,9 +172,10 @@ n8n-enterprise-ai-pack/
 │   ├── package.json
 │   └── server.js
 ├── scripts/
+│   ├── generate_logo.js
 │   ├── generate_sample_invoices.js
+│   ├── generate_visual_assets.js
 │   ├── import_workflows.js
-│   ├── patch_improvements.js
 │   ├── seed_databases.js
 │   ├── test_all.js
 │   ├── test_all.ps1
@@ -154,3 +214,7 @@ n8n-enterprise-ai-pack/
 ├── package.json
 └── README.md
 ```
+
+## License
+
+MIT License. Developed by Alexandr Motologa.
